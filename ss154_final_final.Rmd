@@ -1,5 +1,5 @@
 ---
-title: "R Notebook"
+title: "SS154 Final - Analyzing South Africa’s 2006 Same-Sex Marriage Legalization Impact on Foreign Direct Investments"
 output:
   pdf_document: default
   html_notebook: default
@@ -17,9 +17,12 @@ library(Synth)
 ```
 
 ```{r}
+
+# import the data
+
 data <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQPw6yEuH2geG6KCkYoD8VcBoMgP1xg9RADG1SIa7IzpmUS6ZdITWvq875gVyVt5YrAuqRjtltdZpN0/pub?gid=1079267466&single=true&output=csv")
 colnames(data)
-data
+head(data)
 ```
 
 ```{r}
@@ -27,6 +30,8 @@ data
 ```
 
 ```{r}
+# renaming column names
+
 data <-
   data %>% 
     rename(
@@ -66,12 +71,12 @@ ggplot(data, aes(x = pol_stab_est)) +
 ```{r}
 imputed_data <- data %>%
   filter(country != "Equitorial Guniea") %>%
-  group_by(country) %>%
-  nest() %>%
-  mutate(imputed_govt_educ = map(data, ~ mice(data = .x[, c("year", "govt_educ")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>%
-  mutate(imputed_pol_stab = map(data, ~ mice(data = .x[, c("year", "pol_stab_est")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>%
-  mutate(imputed_data = map2(imputed_govt_educ, imputed_pol_stab, ~bind_cols(complete(.x, action = "long", include = TRUE), complete(.y, action = "long", include = TRUE)))) %>%
-  unnest(cols = imputed_data)
+  group_by(country) %>% # Group the data by country
+  nest() %>% # Nest the data for each country
+  mutate(imputed_govt_educ = map(data, ~ mice(data = .x[, c("year", "govt_educ")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>% # Impute missing values for govt_educ variable using MICE with PMM method, 5 imputations, and a seed of 123
+  mutate(imputed_pol_stab = map(data, ~ mice(data = .x[, c("year", "pol_stab_est")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>% # Impute missing values for pol_stab_est variable using MICE with PMM method, 5 imputations, and a seed of 123
+  mutate(imputed_data = map2(imputed_govt_educ, imputed_pol_stab, ~bind_cols(complete(.x, action = "long", include = TRUE), complete(.y, action = "long", include = TRUE)))) %>% # Combine the imputed datasets for govt_educ and pol_stab_est using bind_cols() and complete() functions
+  unnest(cols = imputed_data) # Unnest the imputed_data column to bring the imputed values back into the main dataset
 ```
 
 ```{r}
@@ -117,11 +122,13 @@ head(merged_data)
 
 ```{r}
 #descriptive stats table
-# descr(merged_data[, c("year", "gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet")])
+
 st(merged_data, vars = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet", "fdi_bop_per_capita"))
 ```
 
 ```{r}
+# dataprep for synthetic control
+
 dataprep_out <- dataprep(
   foo = merged_data,
   predictors = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet"),
@@ -156,6 +163,7 @@ print(top_weights)
 ```
 
 ```{r}
+# paths plot
 path.plot(synth_out, dataprep_out,
           Ylab = c("Foreign direct investment inflows per capita"),
           Xlab = c("year"),
@@ -178,12 +186,10 @@ gaps.plot(synth.res    = synth_out,
 )
 
 abline(v = 2006, lty = 2)
-# arrows(1994, 25, 1996, 25, length = .1)
-# text(1990, 25, "Medical Marijuana\nLegalization",
-#     cex = 0.8)
 ```
 
 ```{r}
+# Treatment Effects from Gaps
 gaps<- dataprep_out$Y1plot-(
         dataprep_out$Y0plot%*%synth_out$solution.w
         ) ; gaps
