@@ -1,0 +1,324 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+
+# install.packages('vtable')
+
+library(vtable)
+library(tidyverse)
+library(dplyr)
+library(mice)
+library(Synth)
+```
+
+```{r}
+data <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vQPw6yEuH2geG6KCkYoD8VcBoMgP1xg9RADG1SIa7IzpmUS6ZdITWvq875gVyVt5YrAuqRjtltdZpN0/pub?gid=1079267466&single=true&output=csv")
+colnames(data)
+data
+```
+
+```{r}
+
+```
+
+```{r}
+data <-
+  data %>% 
+    rename(
+      country = Country,
+      year = Year,
+      fdi_in = Foreign.direct.investment..net.inflows....of.GDP.,
+      fdi_out = Foreign.direct.investment..net.outflows....of.GDP.,
+      gdp_cap_2015 = GDP.per.capita..constant.2015.US..,
+      gdp_cap = GDP.per.capita..current.US..,
+      trade_per_gdp = Trade....of.GDP.,
+      real_interest = Real.interest.rate....,
+      intnl_trade_tax = Taxes.on.international.trade....of.revenue.,
+      intnl_trade_tax_lcu = Taxes.on.international.trade..current.LCU.,
+      pol_stab_est = Political.Stability.and.Absence.of.Violence.Terrorism..Estimate,
+      govt_educ = Government.expenditure.on.education..total....of.GDP.,
+      internet = Individuals.using.the.Internet....of.population.,
+      popn = Population..total
+    )
+
+head(data)
+```
+
+```{r}
+ggplot(data, aes(x = govt_educ)) +
+  geom_density() +
+  facet_wrap(~ country, scales = "free") +
+  labs(title = "Distribution of govt_educ before Imputation")
+```
+
+```{r}
+ggplot(data, aes(x = pol_stab_est)) +
+  geom_density() +
+  facet_wrap(~ country, scales = "free") +
+  labs(title = "Distribution of pol_stab_est before Imputation")
+```
+
+```{r}
+imputed_data <- data %>%
+  filter(country != "Equitorial Guniea") %>%
+  group_by(country) %>%
+  nest() %>%
+  mutate(imputed_govt_educ = map(data, ~ mice(data = .x[, c("year", "govt_educ")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>%
+  mutate(imputed_pol_stab = map(data, ~ mice(data = .x[, c("year", "pol_stab_est")], m = 5, method = "pmm", seed = 123, printFlag = FALSE))) %>%
+  mutate(imputed_data = map2(imputed_govt_educ, imputed_pol_stab, ~bind_cols(complete(.x, action = "long", include = TRUE), complete(.y, action = "long", include = TRUE)))) %>%
+  unnest(cols = imputed_data)
+```
+
+```{r}
+ggplot(imputed_data, aes(x = govt_educ)) +
+  geom_density() +
+  facet_wrap(~ country, scales = "free") +
+  labs(title = "Distribution of govt_educ after Imputation")
+```
+
+```{r}
+ggplot(imputed_data, aes(x = pol_stab_est)) +
+  geom_density() +
+  facet_wrap(~ country, scales = "free") +
+  labs(title = "Distribution of pol_stab_est after Imputation")
+```
+
+```{r}
+
+# Perform missing data imputation for govt_educ and pol_stab_est using mice (synthetic control)
+imputed_data <- data %>%
+  filter(country != "Equitorial Guniea") %>%
+  group_by(country) %>%
+  nest() %>%
+  mutate(imputed_govt_educ = map(data, ~ mice(data = .x[, c("year", "govt_educ")], m = 5, method = "norm.boot", seed = 123, printFlag = FALSE))) %>%
+  mutate(imputed_pol_stab = map(data, ~ mice(data = .x[, c("year", "pol_stab_est")], m = 5, method = "norm.boot", seed = 123, printFlag = FALSE))) %>%
+  mutate(imputed_data = map2(imputed_govt_educ, imputed_pol_stab, ~ left_join(complete(.x, action = "long", include = TRUE), complete(.y, action = "long", include = TRUE), by = "year"))) %>%
+  unnest(cols = imputed_data)
+
+# Calculate the average of imputed values for each year within each country
+imputed_data_avg <- imputed_data %>%
+  group_by(country, year) %>%
+  summarise(govt_educ = mean(govt_educ, na.rm = TRUE),
+            pol_stab_est = mean(pol_stab_est, na.rm = TRUE))
+
+# Merge the averaged imputed data back into the filtered dataset
+merged_data <- data %>%
+  select(-govt_educ, -pol_stab_est) %>%  # Remove the original govt_educ and pol_stab_est variables
+  left_join(imputed_data_avg, by = c("country", "year"))
+
+# View the updated dataset
+head(merged_data)
+```
+
+```{r}
+#descriptive stats table
+# descr(merged_data[, c("year", "gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet")])
+st(merged_data, vars = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet", "fdi_bop_per_capita"))
+```
+
+```{r}
+dataprep_out <- dataprep(
+  foo = merged_data,
+  predictors = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet"),
+  # predictors.op = "mean",
+  time.predictors.prior = 1995:2005,
+  dependent = "fdi_bop_per_capita",
+  unit.variable = "id",
+  unit.names.variable = "country",
+  time.variable = "year",
+  treatment.identifier = 24,
+  controls.identifier = c(2:5, 7:8, 10, 12:14, 16:20), # c(1:4, 7, 12, 14, 16:20),
+  time.optimize.ssr = 1995:2005, # pretreatment for dependent
+  time.plot = 1995:2019
+)
+```
+
+```{r}
+synth_out <- synth(data.prep.obj = dataprep_out)
+```
+
+```{r}
+synth.tables <- synth.tab(
+  dataprep.res = dataprep_out,
+  synth.res = synth_out)
+print(synth.tables)
+
+top_weights <- head(synth.tables$tab.w[order(synth.tables$tab.w$w, decreasing = TRUE), ], 5)  
+
+# Extract the top 5 weights
+cat("\nRobustness test weights - taking out Cuba from Donor Pool:\n")
+print(top_weights)
+```
+
+```{r}
+path.plot(synth_out, dataprep_out,
+          Ylab = c("Foreign direct investment inflows per capita"),
+          Xlab = c("year"),
+          Legend = c("South Africa", "Synthetic SA"),
+          Main = "Trends in fdi_per_capita:\nSA versus Synthetic SA",
+          Ylim = c(-100, 400)
+)
+
+abline(v = 2006, lty = 2)
+```
+
+```{r}
+# gaps plot
+gaps.plot(synth.res    = synth_out,
+          dataprep.res = dataprep_out,
+          Ylab = c("Foreign direct investment inflows per capita"),
+          Xlab         = c("year"),
+          Main         = "Foreign direct investment inflows per capita Gaps\nbetween SA and Synthetic SA",
+          Ylim = c(-400, 400)
+)
+
+abline(v = 2006, lty = 2)
+# arrows(1994, 25, 1996, 25, length = .1)
+# text(1990, 25, "Medical Marijuana\nLegalization",
+#     cex = 0.8)
+```
+
+```{r}
+gaps<- dataprep_out$Y1plot-(
+        dataprep_out$Y0plot%*%synth_out$solution.w
+        ) ; gaps
+```
+
+### Robustness Checks
+
+#### In-space Placebo tests
+
+```{r}
+# install.packages("remotes")
+# remotes::install_github("bcastanho/SCtools")
+library(SCtools)
+placebos <- generate.placebos(dataprep_out, synth_out, Sigf.ipop = 5)
+plot_placebos(placebos, xlab = "Time (year)", ylab = "Foreign direct investment inflows per capita")
+mspe.plot(placebos, discard.extreme = TRUE, mspe.limit = 1, plot.hist = TRUE, xlab = "Time (year)", ylab = "Foreign direct investment inflows per capita")
+```
+
+#### Remove highest weight country
+
+```{r}
+# ROBUSTNESS TEST -> taking out highest weighted country (Cuba 5) from synthetic control donor pool
+dataprep_out2 <- dataprep(
+  foo = merged_data,
+  predictors = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet"),
+  # predictors.op = "mean",
+  time.predictors.prior = 1995:2005,
+  dependent = "fdi_bop_per_capita",
+  unit.variable = "id",
+  unit.names.variable = "country",
+  time.variable = "year",
+  treatment.identifier = 24,
+  controls.identifier = c(2:4, 7:8, 10, 12:14, 16:20), # c(1:4, 7, 12, 14, 16:20),
+  time.optimize.ssr = 1995:2005, # pretreatment for dependent
+  time.plot = 1995:2019
+)
+```
+
+```{r}
+# Run Synth
+synth_out2 <- synth(data.prep.obj = dataprep_out2)
+
+synth.tables <- synth.tab(
+  dataprep.res  = dataprep_out2,
+  synth.res     = synth_out2)
+top_weights <- head(synth.tables$tab.w[order(synth.tables$tab.w$w, decreasing = TRUE), ], 5)  
+
+# Extract the top 5 weights
+cat("\nRobustness test weights - taking out Cuba from Donor Pool:\n")
+print(top_weights)
+```
+
+```{r}
+# path plot
+path.plot(synth_out2, dataprep_out2,
+          Ylab = c("Foreign direct investment inflows per capita"),
+          Xlab = c("year"),
+          Legend = c("South Africa", "Synthetic SA"),
+          Main = "Robustness check: Trends in fdi_per_capita:\nSA versus Synthetic SA",
+          Ylim = c(-100, 400)
+)
+
+abline(v = 2006, lty = 2)
+```
+
+```{r}
+# gaps plot
+gaps.plot(synth.res    = synth_out2,
+          dataprep.res = dataprep_out2,
+          Ylab         = c("Gap in fdi_per_capita"),
+          Xlab         = c("year"),
+          Main         = "Foreign direct investment inflows per capita Gaps\nbetween SA and Synthetic SA",
+          Ylim = c(-500, 500)
+)
+
+abline(v = 2006, lty = 2)
+```
+
+#### In-time Placebo tests
+
+```{r}
+# IN-TIME PLACEBO TEST: Choosing a fake treatment year (pre-treatment) 2001
+
+dataprep_out3 <- dataprep(
+  foo = merged_data,
+  predictors = c("gdp_cap", "trade_per_gdp", "pol_stab_est", "govt_educ", "internet"),
+  # predictors.op = "mean",
+  time.predictors.prior = 1995:2000,
+  dependent = "fdi_bop_per_capita",
+  unit.variable = "id",
+  unit.names.variable = "country",
+  time.variable = "year",
+  treatment.identifier = 24,
+  controls.identifier = c(2:4, 7:8, 10, 12:14, 16:20),
+  time.optimize.ssr = 1995:2000, # pretreatment for dependent
+  time.plot = 1995:2006
+)
+```
+
+```{r}
+# Run Synth
+synth_out3 <- synth(data.prep.obj = dataprep_out3)
+
+synth.tables <- synth.tab(
+  dataprep.res  = dataprep_out3,
+  synth.res     = synth_out3)
+top_weights <- head(synth.tables$tab.w[order(synth.tables$tab.w$w, decreasing = TRUE), ], 5)  
+
+# Extract the top 5 weights
+cat("\nRobustness test weights - taking out Cuba from Donor Pool:\n")
+print(top_weights)
+```
+
+```{r}
+# path plot
+path.plot(synth_out3, dataprep_out3,
+          Ylab = c("Foreign direct investment inflows per capita"),
+          Xlab = c("year"),
+          Legend = c("South Africa", "Synthetic SA"),
+          Main = "Robustness check: Trends in fdi_per_capita:\nSA versus Synthetic SA",
+          Ylim = c(-200, 500)
+)
+
+abline(v = 2001, lty = 2)
+```
+
+```{r}
+# gaps plot
+gaps.plot(synth.res    = synth_out3,
+          dataprep.res = dataprep_out3,
+          Ylab         = c("Gap in fdi_per_capita"),
+          Xlab         = c("year"),
+          Main         = "fdi_per_capita Gap between SA and Synthetic SA",
+          Ylim = c(-500, 500)
+)
+
+abline(v = 2001, lty = 2)
+```
